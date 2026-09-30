@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>Rastreo GPS en vivo</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<style>
+  :root { --bg:#12232e; --ink:#eef4f7; --ok:#3ddc97; --warn:#ffb020; --bad:#ff5d5d; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  body { display: flex; flex-direction: column; background: var(--bg); color: var(--ink); }
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 14px; flex-wrap: wrap; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--warn); flex: none; }
+  .dot.ok { background: var(--ok); }
+  .dot.bad { background: var(--bad); }
+  #estado { font-weight: 600; }
+  #detalle { font-size: 14px; opacity: .8; margin-left: auto; }
+  #mapa { flex: 1; min-height: 0; }
+  button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid #47606f; background: transparent; color: var(--ink); }
+  button[aria-pressed="true"] { background: #27485b; }
+</style>
+</head>
+<body>
+<header>
+  <span id="punto" class="dot"></span>
+  <span id="estado">Esperando datos…</span>
+  <button id="seguir" aria-pressed="true">Seguir</button>
+  <span id="detalle"></span>
+</header>
+<div id="mapa"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script>
+  const URL_DATOS = "https://gps-esp34-default-rtdb.firebaseio.com/gps.json";
+  const CADA_MS = 3000;       // cada cuánto se consulta Firebase
+  const OBSOLETO_S = 20;      // segundos sin datos nuevos = aviso
+
+  const mapa = L.map("mapa").setView([-16.52, -68.208], 17);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    referrerPolicy: "strict-origin-when-cross-origin",
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+  }).addTo(mapa);
+
+  const marcador = L.circleMarker([0, 0], { radius: 9, color: "#fff", weight: 3, fillColor: "#e63946", fillOpacity: 1 });
+  const ruta = L.polyline([], { color: "#e63946", weight: 4, opacity: .7 }).addTo(mapa);
+
+  let primera = true, seguir = true, ultimoTs = 0;
+  const $ = id => document.getElementById(id);
+
+  $("seguir").onclick = () => {
+    seguir = !seguir;
+    $("seguir").setAttribute("aria-pressed", seguir);
+  };
+  mapa.on("dragstart", () => { seguir = false; $("seguir").setAttribute("aria-pressed", false); });
+
+  function estado(clase, texto) {
+    $("punto").className = "dot " + clase;
+    $("estado").textContent = texto;
+  }
+
+  async function actualizar() {
+    try {
+      const r = await fetch(URL_DATOS, { cache: "no-store" });
+      const d = await r.json();
+      if (!d || d.lat == null) { estado("", "Sin datos todavía"); return; }
+
+      const pos = [d.lat, d.lng];
+      if (d.ts !== ultimoTs) {
+        ultimoTs = d.ts;
+        ruta.addLatLng(pos);
+        marcador.setLatLng(pos);
+        if (primera) { marcador.addTo(mapa); mapa.setView(pos, 18); primera = false; }
+        else if (seguir) mapa.panTo(pos);
+      }
+
+      const edad = Math.max(0, Math.round((Date.now() - d.ts) / 1000));
+      if (edad > OBSOLETO_S) estado("bad", "Sin señal hace " + edad + " s");
+      else estado("ok", "En vivo (hace " + edad + " s)");
+      $("detalle").textContent = d.lat.toFixed(5) + ", " + d.lng.toFixed(5) + " · " + d.sats + " satélites";
+    } catch (e) {
+      estado("bad", "Sin conexión con el servidor");
+    }
+  }
+
+  actualizar();
+  setInterval(actualizar, CADA_MS);
+</script>
+</body>
+</html>
